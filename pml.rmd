@@ -1,0 +1,193 @@
+---
+title: "Qualitative Activity Recognition"
+output: html_document
+---
+
+### Executive Summary
+Data was gathered from sensors worn by six young health participants who were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different manners:
+
+- Exactly according to the specification (Class A)
+- Throwing the elbows to the front (Class B)
+- Lifting the dumbbell only halfway (Class C)  
+- Lowering the dumbbell only halfway (Class D)
+- Throwing the hips to the front (Class E)
+
+The sensors were placed on arm and waist bands as well as on the dumbell. Overall 19622 observations were collected across 160 features. The goal of this project was to build models and predict the manner in which the participants did the exercise, denoted by `classe` variable in the training set. In short, a multi-class classification problem where predictors are chosen from a large number of features.  
+  
+After evaluating 5 different classification algorithms, it was found that the **bagged CART** method gives the best trade-off between accuracy of prediction and time taken to execute the process.
+
+### Data Preparation & Cleaning
+The raw data files for this project were downloaded from:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+and
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+which have been originally sourced from:
+http://groupware.les.inf.puc-rio.br/har
+(Please see the reference at the end of this report for more information).
+
+Some basic exploratory data analysis (`str` and `summary`) revealed that the raw data read from **pml-training.csv** had a lot of features containing NAs, blanks or division by zero `#DIV/0!` flags. All of such missing values were transformed as `NA` while reading the raw data to make it simpler for cleaning. 
+Any feature having more than 50% `NA` values was flagged to be removed from the clean data set.
+Also, features that were not relevant for building models (columns 1 through 7) were also removed.
+The final clean data set had 19622 observations with 53 columns remaining.
+```{r dataPrep, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dfRawData <- read.table("pml-training.csv", header=T, sep=",", na.strings=c("NA", " ", "#DIV/0!"))
+dim(dfRawData)
+numObs <- nrow(dfRawData)
+vHasData <- apply(dfRawData, 2, function(x) sum(!is.na(x))/numObs > 0.5)
+# Keep features that have at least 50% values that are not NA
+vFeatures <- colnames(dfRawData)[vHasData]
+dfCleanData <- dfRawData[, vFeatures]
+# Exclude features that are not relevant for building models (in columns 1 to 7)
+dfCleanData <- dfCleanData[, -1:-7]
+# Keep observations that have no NAs in any column
+cc <- complete.cases(dfCleanData)
+dfCleanData <- dfCleanData[cc,]
+dim(dfCleanData)
+```
+
+### Data Partitioning
+The clean dataset was partitioned on `classe` outcome variable into 3 sets in the ratio 60/20/20:  
+
+1. `training` set containing 60% of all observations to be used for model building.
+2. `validation` set containing 20% of all observations to be used for evaluating competing models and picking the best among them.
+3. `testing` set containing the final 20% of all observations to be used for determining the out-of-sample accuracy of the best model chosen after cross-validation.
+```{r dataPart, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+set.seed(11)
+inTrain <- createDataPartition(dfCleanData$classe, p=0.6, list=FALSE)
+training <- dfCleanData[inTrain, ]
+remaining <- dfCleanData[-inTrain, ]
+inTest <- createDataPartition(remaining$classe, p=0.5, list=FALSE) 
+validation <- remaining[-inTest, ]
+testing <- remaining[inTest, ]
+```
+```{r printObs, echo=FALSE, message=FALSE, warning=FALSE}
+print(paste0("Total number of observations = ", nrow(dfCleanData)))
+print(paste0("Number of observations in training set = ", nrow(training)))
+print(paste0("Number of observations in cross-validation set = ", nrow(validation)))
+print(paste0("Number of observations in testing set = ", nrow(testing)))
+```
+
+### Model Building
+Since this is a multi-class classification problem, five competing models appropriate for this type of problem were chosen to be trained on `training` set, namely:
+
+1. CART `rpart`
+2. Linear Discriminant Analysis `lda`
+3. Bagged CART `treebag`
+4. Stochastic Gradient Boosting `gbm`
+5. Random Forest `rf`
+
+For all models, the `train` function in `caret` package was used for training the model with default values of other parameters. Some advantages of this approach were:
+
+- Having a unified interface for modeling and prediction with interfaces to a wide range of algorithms. 
+- Streamlining model tuning using resampling.
+- Comparing model performance on the `training` set with same default parameters within the `train` function.
+- Obtaining a detailed performance summary for evaluation with a variety of helper functions.
+
+```{r model_rpart, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+library(rpart)
+model_rpart <- train(classe ~ ., data=training, method="rpart")
+pred_rpart <- predict(model_rpart, validation)
+cm_rpart <- confusionMatrix(pred_rpart, validation$classe)
+```
+
+```{r model_lda, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+model_lda <- train(classe ~ ., data=training, method="lda")
+pred_lda <- predict(model_lda, validation)
+cm_lda <- confusionMatrix(pred_lda, validation$classe)
+```
+
+```{r model_treebag, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+model_treebag <- train(classe ~ ., data=training, method="treebag")
+pred_treebag <- predict(model_treebag, validation)
+cm_treebag <- confusionMatrix(pred_treebag, validation$classe)
+```
+
+```{r model_gbm, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+library(gbm)
+model_gbm <- train(classe ~ ., data=training, method="gbm", verbose=F)
+pred_gbm <- predict(model_gbm, validation)
+cm_gbm <- confusionMatrix(pred_gbm, validation$classe)
+```
+
+```{r model_rf, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+library(randomForest)
+model_rf <- train(classe ~ ., data=training, method="rf")
+pred_rf <- predict(model_rf, validation)
+cm_rf <- confusionMatrix(pred_rf, validation$classe)
+```
+
+### Model Performance Comparison
+A machine with an Intel i5 2.6GHz quadcore CPU with 16GB RAM running Windows 7 Pro. was used to run all the models in R-Studio environment.
+For each model, the overall accuracy and kappa on `validation` set as well as its execution time on `training` set were aggregated in a data frame. A plot of accuracy v/s execution time reveals that bagged CART `treebag` method provides the best accuracy (98.3%) vis-a-vis its execution time (approx 21 min). Even though randomForest `rf` method provides the best overall accuracy (~99%) among all five models, it takes far longer (54 min) to execute on the `training` set.
+```{r modelComparison, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+dfModelPerf <- data.frame(rbind(cm_rpart$overall[1:2], cm_lda$overall[1:2], 
+                                cm_gbm$overall[1:2], cm_treebag$overall[1:2], cm_rf$overall[1:2]))
+vModelNames <- c(model_rpart$method, model_lda$method, model_gbm$method, model_treebag$method, model_rf$method)
+vExecTimes <- c(model_rpart$times$everything[3], model_lda$times$everything[3], model_gbm$times$everything[3],
+                model_treebag$times$everything[3], model_rf$times$everything[3])
+dfModelPerf <- cbind(vModelNames, dfModelPerf, vExecTimes)
+colnames(dfModelPerf)[1] <- "Method" ; colnames(dfModelPerf)[4] <- "ExecutionTime"
+dfModelPerf
+```
+
+```{r plotModelComparison, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+ggplot(dfModelPerf, aes(x=ExecutionTime, y=Accuracy, color=Method)) + 
+        geom_point() + 
+        scale_color_brewer(palette="Set1") + 
+        xlab("Execution Time (seconds) on training set") + ylab("Accuracy on validation set") +
+        ggtitle("Accuracy v/s Execution Time of Classification Methods") + 
+        theme(panel.background=element_rect(color="black"))
+```
+
+### Out-of-Sample Accuracy
+Based on performance characteristics, the bagged CART `treebag` was chosen as the best model for this exercise. The `confusionMatrix` results of this model on the `validation` set gives an expectation of 98.3% out-of-sample accuracy which is estimated to be 98.6% on the `testing` set.
+```{r testAccuracy, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+# Choose the final model for prediction
+model_final <- model_treebag
+print(paste0("Out-of-sample accuracy from validation set: ", round(cm_treebag$overall[1],3)))
+cm_treebag
+pred_testing <- predict(model_final, testing)
+cm_testing <- confusionMatrix(pred_testing, testing$classe)
+print(paste0("Estimated out-of-sample accuracy from testing set: ", round(cm_testing$overall[1],3)))
+cm_testing
+print("Predictors in the order of their importance")
+varImp(model_final)
+```
+
+### Test Cases
+Testcases were read from **pml-testing.csv**. Irrelevant features were eliminated from the testcases dataset as described in the **Data Preparation & Cleaning** section. Finally, the `treebag` model was used for classifying the 20 observations.
+```{r testcases, echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+dfTestcases <- read.csv("pml-testing.csv")
+# Eliminate features as done in the training set before
+# Also eliminate the dummy 'problem_id' column
+dfTestcases <- dfTestcases[, vFeatures[-60]]
+# Eliminate first 7 columns that are irrelevant
+dfTestcases <- dfTestcases[, -1:-7]
+dim(dfTestcases)
+# Classify test cases
+pred_final <- predict(model_final, dfTestcases)
+# Write to files
+pml_write_files = function(x) {
+    n = length(x)
+    for(i in 1:n) {
+        filename = paste0("./testcases/problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, col.names=FALSE)
+    }
+}
+pml_write_files(pred_final)
+pred_final
+```
+
+### Reference
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf).  
+Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har
